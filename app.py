@@ -1,3 +1,4 @@
+import textwrap
 from dash import Dash, dcc, page_container, callback, Output, Input
 import dash_design_kit as ddk
 import plotly.express as px
@@ -9,6 +10,7 @@ from erddapy import ERDDAP
 import redis
 import os
 import json
+from datetime import datetime, timezone
 
 redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"))
 
@@ -20,6 +22,7 @@ e = ERDDAP(server=server, protocol="tabledap", response="nc")
 
 search_for = "ACG_ -tillamook"
 end_url = e.get_search_url(search_for=search_for, response="csv")
+dataset_ID_list = pd.read_csv(end_url)["Dataset ID"]
 
 dataset_dict = {}
 projects = []
@@ -57,28 +60,47 @@ app.layout = ddk.App(show_editor=False, theme=theme, children=[
                 ddk.ControlItem(label="Variables:", children=[
                     dcc.Loading(dcc.Dropdown(id="variables", multi=False, placeholder="Select Variable"))
                 ]),
-                # ddk.Card(id="project_information"
-                # ])
             ]),
             ddk.Card(width=0.7, children=[dcc.Loading(dcc.Graph(id='timeseries'))])
         ]),
     ]),
+    # ddk.Row(children=[
+    #     ddk.Card(width=0.3, id="project_information_card", children=[
+    #     dcc.Loading(dcc.Markdown(id="project_information"))
+    # ]),
+    #     ddk.Card(width=0.7, children=[dcc.Loading(dcc.Graph(id='trajectory'))]),
+    # ]),
     ddk.Row(children=[
         ddk.Card(width=1, children=[dcc.Loading(dcc.Graph(id='trajectory'))]),
+    ]),
+    ddk.Row(children=[
+        ddk.Card(width=1, id="project_information_card", children=[
+        dcc.Loading(dcc.Markdown(id="project_information"))
+        ])
     ])
 ])
 
-# @callback(
-#     Output("project_information", "data"),
-#     Input("sel_project", "value"),
-# )
-# def update_project_information(sel_project):
-#     attributes = {}
-#     if sel_project:
-#         ds = e.to_xarray()
-#         attributes = ds.attrs
-#         redis_instance.hset("metadata", sel_project, json.dumps(attributes))
-#     return attributes
+@callback(
+    Output("project_information", "children"),
+    Input("sel_project", "value"),
+)
+def update_project_information(sel_project):
+    attributes = {}
+    text = None
+    if sel_project:
+        for dataset_ID in dataset_ID_list:
+            if sel_project in dataset_ID:
+                e.dataset_id = dataset_ID
+                break
+        ds = e.to_xarray()
+        attributes = ds.attrs
+        redis_instance.hset("metadata", sel_project, json.dumps(attributes))
+        text = [f"Project: {attributes['project']}\n",
+                f"Platform: {attributes['platform']}\n",
+                f"Start Date: {datetime.fromisoformat(attributes['time_coverage_start'][:-1]).astimezone(timezone.utc)}\n",
+                f"End Date: {datetime.fromisoformat(attributes['time_coverage_end'][:-1]).astimezone(timezone.utc)}\n",
+                f"{attributes['summary']}"]
+    return text
 
 
 @callback(
@@ -87,7 +109,7 @@ app.layout = ddk.App(show_editor=False, theme=theme, children=[
 )
 def update_dataset_options(sel_project):
     IDs = []
-    for dataset_ID in pd.read_csv(end_url)["Dataset ID"]:
+    for dataset_ID in dataset_ID_list:
         if sel_project:
             if sel_project in dataset_ID:
                 IDs.append(dataset_ID)
