@@ -1,0 +1,7 @@
+dash-design-kit
+pandas
+xarray
+erdappy
+redis
+os
+json
