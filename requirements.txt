@@ -1,7 +1,7 @@
 dash-design-kit
 pandas
 xarray
-erdappy
+erddapy
 redis
 os
 json
