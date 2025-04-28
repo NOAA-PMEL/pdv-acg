@@ -3,5 +3,3 @@ pandas
 xarray
 erddapy
 redis
-os
-json
