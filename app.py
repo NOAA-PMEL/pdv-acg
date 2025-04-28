@@ -16,7 +16,7 @@ redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis:/
 
 #app = Dash(__name__, use_pages=True)
 app = Dash(__name__)
-
+g_server = app.server
 server = "https://data.pmel.noaa.gov/pmel/erddap"
 e = ERDDAP(server=server, protocol="tabledap", response="nc")
 
