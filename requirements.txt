@@ -3,3 +3,4 @@ pandas
 xarray
 erddapy
 redis
+gunicorn
