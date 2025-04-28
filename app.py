@@ -10,13 +10,12 @@ import os
 import json
 from datetime import datetime, timezone
 import plotly.graph_objects as go
-import dash_bootstrap_components as dbc
 
 
 redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"))
 
 #app = Dash(__name__, use_pages=True)
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = Dash(__name__)
 
 server = "https://data.pmel.noaa.gov/pmel/erddap"
 e = ERDDAP(server=server, protocol="tabledap", response="nc")
