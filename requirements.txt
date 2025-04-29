@@ -4,3 +4,4 @@ xarray
 erddapy
 redis
 gunicorn
+netCDF4

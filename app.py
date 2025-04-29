@@ -10,15 +10,16 @@ import os
 import json
 from datetime import datetime, timezone
 import plotly.graph_objects as go
+import netCDF4
 
 
 redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"))
 
 #app = Dash(__name__, use_pages=True)
 app = Dash(__name__)
-g_server = app.server
-server = "https://data.pmel.noaa.gov/pmel/erddap"
-e = ERDDAP(server=server, protocol="tabledap", response="nc")
+server = app.server
+erddap_server = "https://data.pmel.noaa.gov/pmel/erddap"
+e = ERDDAP(server=erddap_server, protocol="tabledap", response="nc")
 
 search_for = "ACG_ -tillamook"
 end_url = e.get_search_url(search_for=search_for, response="csv")
@@ -30,8 +31,8 @@ for dataset_ID in pd.read_csv(end_url)["Dataset ID"]:
     e.dataset_id = dataset_ID
     project = e.dataset_id.split('_')[1]
     #print(e.get_download_url())
-    #ds = xr.open_dataset(server + '/tabledap/' + dataset_ID + '.nc?')
-    #print(ds)
+    ds = xr.open_dataset(erddap_server + '/tabledap/' + dataset_ID + '.nc?')
+    print(ds)
     #print(e.dataset_id.split('_'))
     # ds = e.to_xarray()
     # project = ds.attrs['project']
