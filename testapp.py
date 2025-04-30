@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 import plotly.graph_objects as go
 import requests
 import netCDF4
+import traceback
+import numpy as np
 
 
 redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"))
@@ -33,12 +35,6 @@ for dataset_ID in pd.read_csv(end_url)["Dataset ID"]:
     e.dataset_id = dataset_ID
     dataset_IDs.append(dataset_ID)
     project = e.dataset_id.split('_')[1]
-    #print(e.get_download_url())
-    #ds = xr.open_dataset(server + '/tabledap/' + dataset_ID + '.nc?')
-    #print(ds)
-    #print(e.dataset_id.split('_'))
-    # ds = e.to_xarray()
-    # project = ds.attrs['project']
     if project not in projects:
         projects.append(project)
 
@@ -57,37 +53,44 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
             ds = xr.Dataset.from_dict(json.loads(results))
         
         else:
-            try:
-                ds = xr.open_dataset(requests.get(f"{erddap_url}/{datasetID}.nc").content, decode_times=False)
-                print('opened from request')
+            response = requests.get(f"{erddap_url}/{datasetID}.nc")
+            with open("response.nc", "wb") as f:
+                f.write(response.content)
+            #ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time").swap_dims({"row": "time"})
+            ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time")
+            print('opened from write')
 
-            except TypeError:
-                response = requests.get(f"{erddap_url}/{datasetID}.nc")
-                with open("response.nc", "wb") as f:
-                    f.write(response.content)
-                ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time").swap_dims({"row": "time"})
-                print('opened from write')
+            os.remove("response.nc")
+            # try:
+            #     ds = xr.open_dataset(requests.get(f"{erddap_url}/{datasetID}.nc").content, decode_times=False)
+            #     print('opened from request')
 
-                os.remove("response.nc")
+            # except TypeError:
+            #     response = requests.get(f"{erddap_url}/{datasetID}.nc")
+            #     with open("response.nc", "wb") as f:
+            #         f.write(response.content)
+            #     #ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time").swap_dims({"row": "time"})
+            #     ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time")
+            #     print('opened from write')
 
-            # if is_2d:
-            #     ds = ds.set_index({"row": ["time", dim_2d]}).unstack("row")
-            #     ds = ds.set_index({"row": ["time", dim_2d]}).unstack("row")
-            #     for variable in ds:
-            #         if ds[variable].attrs["coords"] == "time":
-            #             for coord in list(ds.coords.keys()):
-            #                 if coord != "time":
-            #                     ds[variable] = ds[variable].isel({coord: 0}).drop_vars(coord)
+            #     os.remove("response.nc")
 
-            if ds.attrs['dimensions'].split('') == 2:
-                print('2d')
-                ds = ds.expand_dims(dim=ds.attrs['dimensions'].split('')[1])
-                print('new dims', ds.dims)
+            #if is_2d:
+            dims = ds.attrs['dimensions'].split(' ')
+            if len(dims) == 2:
+                print('2D dataset found')
+                dim_2d = dims[1].split('=')[0]
+                ds = ds.set_index({"row": ["time", dim_2d]}).unstack("row")
+                for variable in ds:
+                    if ds[variable].attrs["coords"] == "time":
+                        for coord in list(ds.coords.keys()):
+                            if coord != "time":
+                                ds[variable] = ds[variable].isel({coord: 0}).drop_vars(coord)
+                ds = ds.rename({dim_2d: 'diameter'})
 
             else:
-                #ds = ds.set_coords("time").swap_dims({"row": "time"})
-                print('less than 2d')
-                #pass
+                print('1D dataset found')
+                ds = ds.set_coords("time").swap_dims({"row": "time"})
             
             # save the dataset to redis and set it to expire in 1 day
             redis_instance.hset("data", datasetID, json.dumps(ds.to_dict(), default=str))
@@ -100,6 +103,7 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
     except Exception as e:
         # print any errors and return None
         print(e)
+        traceback.print_exc()
         return None
 
 
@@ -167,15 +171,14 @@ def update_project_information(sel_project):
     if sel_project:
         for dataset_ID in dataset_ID_list:
             if sel_project in dataset_ID:
-                print('ID', dataset_ID)
                 ds = get_dataset(dataset_ID)
-                print(ds)
-                project_attributes = ds.attrs
-                text = [f"Project: {project_attributes['project']}\n",
-                        f"Platform: {project_attributes['platform']}\n",
-                        f"Start Date: {datetime.fromisoformat(project_attributes['time_coverage_start'][:-1]).astimezone(timezone.utc)}\n",
-                        f"End Date: {datetime.fromisoformat(project_attributes['time_coverage_end'][:-1]).astimezone(timezone.utc)}\n",
-                        f"{project_attributes['summary']}"]
+                if ds:
+                    project_attributes = ds.attrs
+                    text = [f"Project: {project_attributes['project']}\n",
+                            f"Platform: {project_attributes['platform']}\n",
+                            f"Start Date: {datetime.fromisoformat(project_attributes['time_coverage_start'][:-1]).astimezone(timezone.utc)}\n",
+                            f"End Date: {datetime.fromisoformat(project_attributes['time_coverage_end'][:-1]).astimezone(timezone.utc)}\n",
+                            f"{project_attributes['summary']}"]
                 return text
 
 
@@ -204,21 +207,12 @@ def update_variable_options(sel_dataset):
     variables = []
     if sel_dataset:
         ds = get_dataset(sel_dataset)
-        # e.dataset_id = sel_dataset
-        # # ds = e.to_xarray()
-        # # for var in ds.data_vars:
-        # #     variables.append(var)
-        # if redis_instance.hget("data", sel_dataset) and redis_instance.hget("dataset_metadata", sel_dataset):
-        #     ds = pd.DataFrame(json.loads(redis_instance.hget("data", sel_dataset)))
-        #     meta = json.loads(redis_instance.hget("dataset_metadata", sel_dataset))
-        # else:
-        #     ds = e.to_pandas()
-        #     meta = e.to_xarray()
-        #     dataset_attributes = meta.attrs
-        #     redis_instance.hset("data", sel_dataset, ds.to_json())
-        #     redis_instance.hset("dataset_metadata", sel_dataset, json.dumps(dataset_attributes))
-        for var in ds:
-            variables.append(var)
+        if ds:
+            vars_to_exclude = ['trajectory_id', 'duration', 'latitude', 'longitude',
+                                    'altitude', 'mid_time', 'end_time']
+            for var in ds:
+                if var not in vars_to_exclude:
+                    variables.append(var)
     return variables
 
 
@@ -232,15 +226,12 @@ def update_variable_options(sel_dataset):
 def plot_1D_timeseries(data_var, sel_dataset, sel_project):
     if data_var:
         ds = get_dataset(sel_dataset)
-        if len(ds.dims) == 1:
-            #print(ds.dims)
-        # metadata = json.loads(redis_instance.hget("dataset_metadata", sel_dataset))
-        # if len(metadata['dimensions'].split()) == 1:
-            #ds = pd.DataFrame(json.loads(redis_instance.hget("data", sel_dataset)))
-            ds = ds.to_dataframe()
-            fig = px.scatter(ds, x=ds.index, y=data_var)
-            fig.update_layout(margin=dict(l=60, r=60, t=60, b=60))
-            return fig
+        if ds and data_var in ds.variables:
+            if len(ds.dims) == 1:
+                ds = ds.to_dataframe()
+                fig = px.scatter(ds, x=ds.index, y=data_var)
+                fig.update_layout(margin=dict(l=60, r=60, t=60, b=60))
+                return fig
         else:
             return None
 
@@ -255,64 +246,57 @@ def plot_1D_timeseries(data_var, sel_dataset, sel_project):
 def plot2D_timeseries(data_var, sel_dataset, sel_project):
     if data_var:
         ds = get_dataset(sel_dataset)
-        # print(data_var)
-        # metadata = json.loads(redis_instance.hget("dataset_metadata", sel_dataset))
-        # dims = metadata['dimensions'].split()
-        #print(ds.head())
-        #print(ds.attrs['dimensions'])
-        if len(ds.dims) == 2:
-            #ds = e.to_xarray
-            #ds = pd.DataFrame(json.loads(redis_instance.hget("data", sel_dataset)))
-            #fig = px.imshow(ds)
-            #max_val = ds[data_var].max()
-            ds = ds.to_dataframe()
-            fig = go.Figure(data = go.Heatmap(z = ds[data_var], x = ds.iloc[:,0], y = ds.iloc[:,1]#,
-            # colorscale= [
-            # [0, 'rgb(255, 0, 255)'],        #0
-            # [1./10000, 'rgb(0, 0, 255)'], #10
-            # [1./1000, 'rgb(0, 255, 255)'],  #100
-            # [1./100, 'rgb(0, 255, 0)'],   #1000
-            # [1./10, 'rgb(255, 255, 0)'],       #10000
-            # [1., 'rgb(255, 0, 0)'],             #100000
-            # ],
-            # colorbar = dict(
-            #     tick0 = 0,
-            #     tickmode = 'array',
-            #     tickvals = [0, max_val/1000, max_val/10, max_val]
-             ))#)
-            fig.update_yaxes(type='log')
-            fig.update_layout(xaxis_title = "Time", yaxis_title = "Diameter (micrometers)", title = data_var, margin={'t': 50})
-            fig.show()
-            return fig
+        if ds and data_var in ds.variables:
+            if len(ds.dims) == 2:
+                fig = px.imshow(ds[data_var].T, color_continuous_scale='RdBu_r', origin='lower')
+                fig.update_yaxes(type='log')
+                fig.update_layout(xaxis_title = "Time", yaxis_title = "Diameter (micrometers)", title = data_var, margin={'t': 50})
+                fig.show()
+                return fig
         else:
             return None
 
 
 @callback(
     Output("trajectory", "figure"),
-    Input("dataset_options", "value")
+    Input("dataset_options", "value"),
+    Input('graph', 'relayoutData')
 )
-def plot_trajectory(sel_dataset):
+def plot_trajectory(sel_dataset, zoom_data):
     if sel_dataset:
         ds = get_dataset(sel_dataset)
-        # if redis_instance.hget("data", sel_dataset):
-        #     ds = pd.DataFrame(json.loads(redis_instance.hget("data", sel_dataset)))
-        # else:
-        #     ds = e.to_pandas()
-        #     redis_instance.hset("data", sel_dataset, ds.to_json())
-        #ds = pd.DataFrame(json.loads(redis_instance.hget("data", sel_dataset)))
-        # fig = px.scatter_map(ds.to_pandas(), lat='latitude (degrees_north)', lon='longitude (degrees_east)', zoom=6, 
-        #                 center={"lat": ds['latitude (degrees_north)'].mean(), "lon": ds['longitude (degrees_east)'].mean()})
-        ds = ds.to_dataframe()
-        fig = px.scatter_map(ds, lat='latitude', lon='longitude', zoom=6, 
-                        center={"lat": ds['latitude'].mean(), "lon": ds['longitude'].mean()})
-        fig.update_geos(showcoastlines=True, coastlinecolor="RebeccaPurple",
-                                    showland=True, landcolor="LightGreen",
-                                    showocean=True, oceancolor="Azure",
-                                    showlakes=True, lakecolor="Blue", 
-                                    resolution=50,)
-        fig.update_layout()
-        return fig
+        if ds:
+            df = ds.to_dataframe()
+            lats = df['latitude']
+            lons = df['longitude']
+            center_lat = np.mean(lats)
+            center_lon = np.mean(lons)
+            max_lat_diff = np.max(np.abs(lats - center_lat))
+            max_lon_diff = np.max(np.abs(lons - center_lon))
+            zoom_level = 8 - np.log2(max(max_lat_diff, max_lon_diff))
+            fig = px.scatter_map(df, lat='latitude', lon='longitude', zoom=zoom_level, 
+                            center={"lat": df['latitude'].mean(), "lon": df['longitude'].mean()})
+            fig.update_geos(showcoastlines=True, coastlinecolor="RebeccaPurple",
+                                        showland=True, landcolor="LightGreen",
+                                        showocean=True, oceancolor="Azure",
+                                        showlakes=True, lakecolor="Blue", 
+                                        resolution=50,)
+            try:
+                start_time = zoom_data['xaxis.range[0]']
+                end_time = zoom_data['xaxis.range[1]']
+                print(start_time, end_time)
+
+                df_sel = df.loc[start_time: end_time]
+                trace = go.Scattermap(
+                    lat=df_sel['latitude'],
+                    lon=df_sel['longitude'],
+                    marker={'size': 7, 'color': 'red'}                )
+                fig.add_trace(trace)
+                fig.update_traces()
+            except:
+                pass
+            fig.update_layout()
+            return fig
 
 
 if __name__ == '__main__':
