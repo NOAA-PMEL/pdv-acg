@@ -67,7 +67,6 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
                 ds = ds.rename({dim_2d: 'diameter'})
 
             else:
-                print('1D dataset found')
                 ds = ds.set_coords("time").swap_dims({"row": "time"})
             
             # save the dataset to redis and set it to expire in 1 day
@@ -108,9 +107,16 @@ app.layout = ddk.App(show_editor=False, theme=theme, children=[
             ]),
             ddk.Card(width=0.7, children=[
                 ddk.Row(children=[
-                    ddk.Block(width=0.9, children=[dcc.Loading(dcc.Graph(id='graph'))]),
-                    ddk.Block(width=0.1, id='slider_container', style = {'display': 'none'},
-                    children=[dcc.Loading(dcc.Slider(id='color_range', min=0, max=0, vertical=True, verticalHeight=300))])
+                    dcc.Tabs([
+                        dcc.Tab(label='1D Plot', children=[
+                            ddk.Block(width=0.9, children=[dcc.Loading(dcc.Graph(id='1D_graph'))])
+                        ]),
+                        dcc.Tab(label='2D Plot', children=[
+                            ddk.Block(width=0.9, children=[dcc.Loading(dcc.Graph(id='2D_graph'))]),
+                            ddk.Block(width=0.1, id='slider_container', style = {'display': 'none'},
+                            children=[dcc.Loading(dcc.Slider(id='color_range', min=0, max=0, vertical=True, verticalHeight=300))])
+                        ])
+                    ])
                 ])
             ]),
         ])
@@ -200,7 +206,7 @@ def update_variable_options(sel_dataset):
 
 @callback(
     #Output("1D_timeseries", "figure"),
-    Output("graph", "figure"),
+    Output("1D_graph", "figure"),
     Input("variables", "value"),
     Input("trajectory", "selectedData"),
     State("dataset_options", "value"),
@@ -213,7 +219,6 @@ def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project):
     fig = None
     print(map_zoom)
     if data_var:
-        print(data_var)
         ds = get_dataset(sel_dataset)
         #ds = xr.Dataset.from_dict(current_ds)
         if ds:
@@ -250,7 +255,7 @@ def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project):
 
 @callback(
     #Output("2D_timeseries", "figure"),
-    Output("graph", "figure", allow_duplicate=True),
+    Output("2D_graph", "figure", allow_duplicate=True),
     Output("color_range", "min"),
     Output("color_range", "max"),
     Output("slider_container", "style"),
@@ -271,8 +276,7 @@ def plot2D_timeseries(data_vars, sel_dataset, sel_project, slider_val):
                 if len(ds.dims) == 2:
                     min_z = round(ds.min(dim=['time', 'diameter'])[data_var].item(), 0)
                     max_z = round(ds.max(dim=['time', 'diameter'])[data_var].item(), 0)
-                    style = {'display': 'flex', 'align-items': 'center', 'justify-content': 'center'}
-                    print('min / max', min_z, max_z)
+                    style = {'display': 'inline-block', 'align-items': 'center', 'justify-content': 'center'}
                     fig = px.imshow(ds[data_var].T, color_continuous_scale='RdBu_r', origin='lower', zmin=min_z, zmax=slider_val)
                     fig.update_yaxes(type='log')
                     fig.update_layout(xaxis_title = "Time", yaxis_title = "Diameter (micrometers)", title = data_var, margin={'t': 50})
@@ -280,19 +284,18 @@ def plot2D_timeseries(data_vars, sel_dataset, sel_project, slider_val):
     if fig is None:
         return no_update
     else:
-        print('returning style')
-        print(style)
         return fig, min_z, max_z, style
 
 
 @callback(
     Output("trajectory", "figure"),
     Input("dataset_options", "value"),
-    Input('graph', 'relayoutData'),
+    Input('1D_graph', 'relayoutData'),
+    Input('2D_graph', 'relayoutData'),
     Input('variables', 'value')
     #Input("current_ds", "data")
 )
-def plot_trajectory(sel_dataset, zoom_data, data_var):
+def plot_trajectory(sel_dataset, one_zoom_data, two_zoom_data, data_var):
     if sel_dataset:
         if data_var:
             ds = get_dataset(sel_dataset)
@@ -316,9 +319,8 @@ def plot_trajectory(sel_dataset, zoom_data, data_var):
                                             showlakes=True, lakecolor="Blue", 
                                             resolution=50,)
                 try:
-                    start_time = zoom_data['xaxis.range[0]']
-                    end_time = zoom_data['xaxis.range[1]']
-                    print(start_time, end_time)
+                    start_time = one_zoom_data['xaxis.range[0]']
+                    end_time = one_zoom_data['xaxis.range[1]']
 
                     df_sel = df.loc[start_time: end_time]
                     trace = go.Scattermap(
@@ -327,8 +329,21 @@ def plot_trajectory(sel_dataset, zoom_data, data_var):
                         marker={'size': 7, 'color': 'red'})
                     fig.add_trace(trace)
                     fig.update_traces()
-                except:
-                    pass
+
+                except: 
+                    try: 
+                        start_time = two_zoom_data['xaxis.range[0]']
+                        end_time = two_zoom_data['xaxis.range[1]']
+
+                        df_sel = df.loc[start_time: end_time]
+                        trace = go.Scattermap(
+                            lat=df_sel['latitude'],
+                            lon=df_sel['longitude'],
+                            marker={'size': 7, 'color': 'red'})
+                        fig.add_trace(trace)
+                        fig.update_traces()
+                    except:
+                        pass
                 fig.update_layout()
                 return fig
     else:

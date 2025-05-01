@@ -5,3 +5,7 @@ erddapy
 redis
 gunicorn
 netCDF4
+numpy
+traceback
+requests
+datetime
