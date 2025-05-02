@@ -58,7 +58,9 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
             dims = ds.attrs['dimensions'].split(' ')
             if len(dims) == 2:
                 dim_2d = dims[1].split('=')[0]
+                print('about to unstack')
                 ds = ds.set_index({"row": ["time", dim_2d]}).unstack("row")
+                print('unstack successful')
                 for variable in ds:
                     if ds[variable].attrs["coords"] == "time":
                         for coord in list(ds.coords.keys()):
@@ -78,7 +80,7 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
 
     except Exception as e:
         # print any errors and return None
-        print(e)
+        print('error', e)
         traceback.print_exc()
         return None
 
@@ -159,6 +161,7 @@ def update_project_information(sel_project):
                             f"Start Date: {datetime.fromisoformat(project_attributes['time_coverage_start'][:-1]).astimezone(timezone.utc)}\n",
                             f"End Date: {datetime.fromisoformat(project_attributes['time_coverage_end'][:-1]).astimezone(timezone.utc)}\n",
                             f"{project_attributes['summary']}"]
+                    #break
     if text is None:
         return no_update
     else:
@@ -217,7 +220,6 @@ def update_variable_options(sel_dataset):
 )
 def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project):
     fig = None
-    print(map_zoom)
     if data_var:
         ds = get_dataset(sel_dataset)
         #ds = xr.Dataset.from_dict(current_ds)
