@@ -19,7 +19,7 @@ import numpy as np
 redis_instance = redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379"))
 
 #app = Dash(__name__, use_pages=True)
-app = Dash(__name__, suppress_callback_exceptions=True, compress=True)
+app = Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 erddap_server = "https://data.pmel.noaa.gov/pmel/erddap"
 e = ERDDAP(server=erddap_server, protocol="tabledap", response="nc")
