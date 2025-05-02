@@ -38,7 +38,7 @@ theme = {
     "card_background_color":"#FFFFFF",
     "card_box_shadow":"0px 0px 0px rgba(0,0,0,0)",
     "card_outline":{
-        "width":"1px",
+        "width":"0px",
         "style":"solid",
         "color":"#CCCCCC"
     },

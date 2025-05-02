@@ -1,5 +1,5 @@
 from logging import debug
-from dash import Dash, dcc, callback, Output, Input, State, html, no_update
+from dash import Dash, dcc, callback, Output, Input, State, html, no_update, ctx
 import dash_design_kit as ddk
 import plotly.express as px
 from theme import theme
@@ -47,34 +47,25 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
             results = redis_instance.hget("data", datasetID)
             # create xarray Dataset from results(json)
             ds = xr.Dataset.from_dict(json.loads(results))
-            print('ds loaded from redis')
         
         else:
             response = requests.get(f"{erddap_url}/{datasetID}.nc")
             with open("response.nc", "wb") as f:
                 f.write(response.content)
             ds = xr.open_dataset("response.nc", decode_times=False).set_coords("time")
-            print('ds loaded from write')
             os.remove("response.nc")
 
             # check for 2 dimensional data
             dims = ds.attrs['dimensions'].split(' ')
-            print('dims', dims)
             if len(dims) == 2:
                 dim_2d = dims[1].split('=')[0]
-                print(ds.dims)
                 ds = ds.set_index({"row": ["time", dim_2d]}).unstack("row")
-                print('here')
                 for variable in ds:
                     if ds[variable].attrs["coords"] == "time":
-                        print('here1')
                         for coord in list(ds.coords.keys()):
                             if coord != "time":
-                                print('here2')
                                 ds[variable] = ds[variable].isel({coord: 0}).drop_vars(coord)
                 ds = ds.rename({dim_2d: 'diameter'})
-                print('resized', ds.sizes)
-                print('lat', len(ds['latitude']))
 
             else:
                 ds = ds.set_coords("time").swap_dims({"row": "time"})
@@ -114,7 +105,7 @@ twoD_tab = dcc.Tab(label='2D Plot', children=[
                             ]),
                             ddk.Block(width=0.9, children=[dcc.Loading(dcc.Graph(id='2D_graph'))]),
                             ddk.Block(width=0.1, id='slider_container', style = {'display': 'none'},
-                            children=[dcc.Loading(dcc.Slider(id='color_range', min=0, max=0, vertical=True, verticalHeight=300))])
+                            children=[dcc.Loading(dcc.Slider(id='color_range', min=0, max=60000, value=60000, vertical=True))])
                         ])
 
 
@@ -122,6 +113,8 @@ app.layout = ddk.App(show_editor=False, theme=theme, children=[
     dcc.Store(id='selected_range'),
     dcc.Store(id='grid-data-url'),
     dcc.Store(id='signal'),
+    dcc.Store(id='1D_relayoutdata'),
+    dcc.Store(id='2D_relayoutdata'),
     ddk.Header(children = [
         ddk.Logo(app.get_asset_url("PMEL_logo.png")),
         ddk.Title("PMEL Data Viewer - Atmospheric Chemistry"),
@@ -141,7 +134,7 @@ app.layout = ddk.App(show_editor=False, theme=theme, children=[
                 # ]),
             ]),
             ddk.Card(width=0.8, children=[
-                ddk.Row(children=[dcc.Tabs([oneD_tab, twoD_tab])])
+                ddk.Row(children=[dcc.Tabs(id='tab_container', children = [oneD_tab, twoD_tab])])
                 ])
             ]),
         ]),
@@ -212,14 +205,14 @@ def update_dataset_options(sel_project):
     Output("1D_variables", "options"),
     Output("2D_variables", "options"),
     Output("signal", "data"),
-    Input("dataset_options", "value")
+    Input("dataset_options", "value"),
+    prevent_initial_call=True
+    #Input("sel_project", "value")
 )
 def update_variable_options(sel_dataset):
-    variables, variables_1d, variables_2d = None, None, None
+    variables, variables_1d, variables_2d = None, [], []
     if sel_dataset:
-        print('about to get ds')
         ds = get_dataset(sel_dataset)
-        print('successfully retrieved ds')
         if ds:
             vars_to_exclude = ['trajectory_id', 'duration', 'mid_time', 'end_time']
             variables, variables_1d, variables_2d = [], [], []
@@ -233,7 +226,8 @@ def update_variable_options(sel_dataset):
                 #     variables.append(var)
             #return variables, pd.DataFrame.to_dict(ds.to_dataframe())
     if variables_1d is None:
-        return no_update
+        return variables_1d, variables_2d, None
+        #return no_update
     else:
         return variables_1d, variables_2d, 1
 
@@ -244,17 +238,17 @@ def update_variable_options(sel_dataset):
     #Input("variables", "value"),
     Input("1D_variables", "value"),
     Input("trajectory", "selectedData"),
-    State("dataset_options", "value"),
+    Input("dataset_options", "value"),
     State("sel_project", "value"),
     #Input("dataset_options", "value"),
     #Input("sel_project", "value"),
-    Input("signal", "data")
+    Input("signal", "data"),
+    Input("tab_container", "value")
 )
-def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project, signal):
+def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project, signal, tab_container):
     fig = None
-    if data_var:
+    if data_var :
         ds = get_dataset(sel_dataset)
-        #ds = xr.Dataset.from_dict(current_ds)
         if ds:
             fig = go.Figure()
             for var in data_var:
@@ -262,34 +256,28 @@ def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project, signal):
                     if len(ds[var].coords) == 1:
                         df = ds.to_dataframe()
                         fig.add_trace(go.Scatter(x=df.index.get_level_values('time'), y=df[var], name=var))
-                        #fig = px.scatter(df, x=df.index, y=var)
-                        fig.update_layout(margin=dict(l=60, r=60, t=60, b=60), xaxis_title='Time')
+                        # if map_zoom:
+                        #     lat_range = [map_zoom['range']['map'][0][1], map_zoom['range']['map'][1][1]]
+                        #     lon_range = [map_zoom['range']['map'][0][0], map_zoom['range']['map'][1][0]]
+                        #     max_lat = max(lat_range[0], lat_range[1])
+                        #     min_lat = min(lat_range[0], lat_range[1])
+                        #     max_lon = max(lon_range[0], lon_range[1])
+                        #     min_lon = min(lon_range[0], lon_range[1])
+                        #     print('lat', lat_range)
+                        #     print('lon', lon_range)
+                        #     zoom_df = df[df['latitude'].between(min_lat, max_lat) & df['longitude'].between(min_lon, max_lon)]
+                        #     fig.add_trace(go.Scatter(x=zoom_df.index.get_level_values('time'), y=zoom_df[var], name=var, marker={'size': 7, 'color': 'red'}))
+                        fig.update_layout(xaxis_title='Time', showlegend=True, margin={'t': 50})
     if fig is None:
-        return no_update
+        fig = go.Figure({'data': [], 'layout': {'autosize': True, 'xaxis': {'autorange': True}, 'yaxis': {'autorange': True}}})
+        return fig
     else:
         return fig
-    # fig = None
-    # if data_var:
-    #     print(data_var)
-    #     ds = get_dataset(sel_dataset)
-    #     #ds = xr.Dataset.from_dict(current_ds)
-    #     if ds:
-    #         for var in data_var:
-    #             if var in ds.variables:
-    #                 if len(ds.dims) == 1:
-    #                     fig = go.Figure()
-    #                     df = ds.to_dataframe()
-    #                     fig.add_trace(go.Scatter(x=df.index, y=df[var], name=var))
-    #                     #fig = px.scatter(df, x=df.index, y=var)
-    #                     fig.update_layout(margin=dict(l=60, r=60, t=60, b=60), xaxis_title='Time', yaxis_title=var)
-    # if fig is None:
-    #     return no_update
-    # else:
-    #     return fig
+
 
 @callback(
     #Output("2D_timeseries", "figure"),
-    Output("2D_graph", "figure", allow_duplicate=True),
+    Output("2D_graph", "figure"),
     Output("color_range", "min"),
     Output("color_range", "max"),
     Output("slider_container", "style"),
@@ -298,88 +286,96 @@ def plot_1D_timeseries(data_var, map_zoom, sel_dataset, sel_project, signal):
     Input("dataset_options", "value"),
     Input("sel_project", "value"),
     Input("color_range", "value"),
-    prevent_initial_call=True
+    Input("tab_container", "value"),
+    #prevent_initial_call=True
 )
-def plot2D_timeseries(data_var, sel_dataset, sel_project, slider_val):
-    fig, min_z, max_z, style = None, None, None, None
+def plot2D_timeseries(data_var, sel_dataset, sel_project, slider_val, tab_container):
+    fig, min_z, max_z, style = None, None, None, {'display': 'none'}
+    input_trig = ctx.triggered_id
+    if input_trig != 'color_range':
+        slider_val = 60000
+
     #fig = None
     if data_var:
         ds = get_dataset(sel_dataset)
-        #ds = xr.Dataset.from_dict(current_ds)
         if ds and data_var in ds.variables:
             if len(ds[data_var].coords) == 2:
                 min_z = round(ds.min(dim=['time', 'diameter'])[data_var].item(), 0)
                 max_z = round(ds.max(dim=['time', 'diameter'])[data_var].item(), 0)
                 max_z = min(int(max_z), 60000)
                 style = {'display': 'inline-block', 'align-items': 'center'}
-                fig = px.imshow(ds[data_var].T, color_continuous_scale='RdBu_r', origin='lower', zmin=min_z, zmax=slider_val)
+                fig = px.imshow(ds[data_var].T, color_continuous_scale='RdBu_r', origin='lower', zmin=min_z, zmax=min(slider_val, max_z),)
                 fig.update_yaxes(type='log')
                 fig.update_layout(xaxis_title = "Time", yaxis_title = "Diameter (micrometers)", title = data_var, margin={'t': 50})
                 fig.show()
+
     if fig is None:
-        return no_update
+        fig = go.Figure({'data': [], 'layout': {'autosize': True, 'xaxis': {'autorange': True}, 'yaxis': {'autorange': True}}})
+        return fig, min_z, max_z, style
     else:
         return fig, min_z, max_z, style
 
 
 @callback(
     Output("trajectory", "figure"),
-    State("dataset_options", "value"),
+    # Output("1D_relayoutdata", "data"),
+    # Output("2D_relayoutdata", "data"),
+    Input("dataset_options", "value"),
     Input('1D_graph', 'relayoutData'),
     Input('2D_graph', 'relayoutData'),
     #State('variables', 'value'),
-    State('1D_variables', 'value'),
-    State('2D_variables', 'value'),
+    Input('1D_variables', 'value'),
+    Input('2D_variables', 'value'),
     Input("signal", "data"),
+    Input("tab_container", "value"),
     prevent_initial_call=True
 )
-def plot_trajectory(sel_dataset, one_zoom_data, two_zoom_data, oneD_data_var, twoD_data_var, signal):
-    print('signal', signal)
+def plot_trajectory(sel_dataset, one_zoom_data, two_zoom_data, oneD_data_var, twoD_data_var, signal, tab_container):
+
     if sel_dataset:
-        #if data_var:
-        #if oneD_data_var or twoD_data_var:
             ds = get_dataset(sel_dataset)
             if ds:
                 df = ds.to_dataframe()
-                #print(df)
-                #print(df)
-                #df = ds
                 lats = df['latitude']
                 lons = df['longitude']
-                # lats = ds['latitude']
-                # lons = ds['longitude']
                 center_lat = np.mean(lats)
                 center_lon = np.mean(lons)
                 max_lat_diff = np.max(np.abs(lats - center_lat))
                 max_lon_diff = np.max(np.abs(lons - center_lon))
                 zoom_level = 8 - np.log2(max(max_lat_diff, max_lon_diff))
-                # fig = go.Figure()
-                # fig.add_trace(go.Scattermap(lat=lats, lon=lons))
-                if len(lats) > 8000:
-                    df_sub = df.iloc[::10, :]
+                if len(lats) > 500000:
+                    df_sub = df.iloc[::20, :]
                 else:
                     df_sub = df
-                fig = px.scatter_map(df_sub, lat='latitude', lon='longitude', zoom=zoom_level, 
+                # fig = px.scatter_map(df_sub, lat='latitude', lon='longitude', zoom=zoom_level, 
+                #                 center={"lat": df['latitude'].mean(), "lon": df['longitude'].mean()})
+                input_trig = ctx.triggered_id
+                if (input_trig != '1D_graph') and (input_trig != '2D_graph') :
+                    fig = px.scatter_map(df_sub, lat='latitude', lon='longitude', zoom=zoom_level, 
                                 center={"lat": df['latitude'].mean(), "lon": df['longitude'].mean()})
-                # fig.update_geos(showcoastlines=True, coastlinecolor="RebeccaPurple",
-                #                             showland=True, landcolor="LightGreen",
-                #                             showocean=True, oceancolor="Azure",
-                #                             showlakes=True, lakecolor="Blue", 
-                #                             resolution=50,)
-                #df = ds.to_dataframe()
-                try:
-                    start_time = one_zoom_data['xaxis.range[0]']
-                    end_time = one_zoom_data['xaxis.range[1]']
+                    return fig
 
-                    df_sel = df_sub.loc[start_time: end_time]
-                    trace = go.Scattermap(
-                        lat=df_sel['latitude'],
-                        lon=df_sel['longitude'],
-                        marker={'size': 7, 'color': 'red'})
-                    fig.add_trace(trace)
-                    fig.update_traces()
+                if tab_container == 'tab-1':               
+                    fig = px.scatter_map(df_sub, lat='latitude', lon='longitude', zoom=zoom_level, 
+                                center={"lat": df['latitude'].mean(), "lon": df['longitude'].mean()}) 
+                    try:
+                        start_time = one_zoom_data['xaxis.range[0]']
+                        end_time = one_zoom_data['xaxis.range[1]']
 
-                except: 
+                        df_sel = df_sub.loc[start_time: end_time]
+
+                        trace = go.Scattermap(
+                            lat=df_sel['latitude'],
+                            lon=df_sel['longitude'],
+                            marker={'size': 7, 'color': 'red'})
+                        fig.add_trace(trace)
+
+                    except: 
+                        pass
+
+                if tab_container == 'tab-2':
+                    fig = px.scatter_map(df_sub, lat='latitude', lon='longitude', zoom=zoom_level, 
+                                center={"lat": df['latitude'].mean(), "lon": df['longitude'].mean()})
                     try: 
                         start_time = two_zoom_data['xaxis.range[0]']
                         end_time = two_zoom_data['xaxis.range[1]']
@@ -391,14 +387,23 @@ def plot_trajectory(sel_dataset, one_zoom_data, two_zoom_data, oneD_data_var, tw
                             marker={'size': 7, 'color': 'red'})
                         fig.add_trace(trace)
                         fig.update_traces()
+                        # fig.update_traces()
+                        # fig.update_layout()
+                        # print('update fig')
+                        # return fig
                     except:
                         pass
                 #fig.update_maps(zoom=zoom_level, center_lat=center_lat, center_lon=center_lon)
+                fig.update_traces()
                 fig.update_layout()
-                print('update fig')
                 return fig
     else:
-        return no_update
+        #fig = go.Figure({'data': [], 'layout': {'autosize': True, 'xaxis': {'autorange': True}, 'yaxis': {'autorange': True}}})
+        df_empty = pd.DataFrame({'lat': [], 'lon': []})
+        fig = px.scatter_map(df_empty, lat='lat', lon='lon')
+        fig.update_layout({'autosize': True})
+        return fig
+        #return no_update
 
 
 if __name__ == '__main__':
