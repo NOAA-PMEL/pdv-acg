@@ -72,6 +72,7 @@ def get_dataset(datasetID:str, is_2d=False, dim_2d="diameter", erddap_url=erddap
             
             # save the dataset to redis and set it to expire in 1 day
             redis_instance.hset("data", datasetID, json.dumps(ds.to_dict(), default=str))
+            redis_instance.hexpire("data", 86400, datasetID)
         
         # convert time to datetime object and return dataset
         ds = xr.decode_cf(ds)
